@@ -1,0 +1,283 @@
+---
+title: 'Estudio de las retenciones en Valencia'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+### Asignatura de "Programación de sistema: R" - Master Big Data - UPV
+
+# Carga y estructura de los datos
+
+```{r}
+load("totr.Rdata")
+objects()
+```
+```{r}
+dat <- tot
+```
+```{r}
+dim(dat)
+```
+
+Tenemos más de 1,9 millones de observaciones de 8 variables.
+
+```{r}
+str(dat)
+head(dat)
+```
+
+Las variables de nuestros datos;
+
+* Definen la fecha y hora; "any", "mes", "dia", "hora", "minut"
+* Indican una localizacion; "id", "carrer"
+* Muestran el estado del tráfico; "estat"
+
+***
+
+Valores que toman las variables temporales:
+
+```{r}
+unique(dat$any)
+unique(dat$mes)
+unique(dat$dia)
+```
+
+Tenemos datos sobre los días de febrero, marzo y abril de 2015 (aunque no necesariamente todos).
+
+```{r}
+sort(unique(dat$hora))
+unique(dat$min)
+```
+
+Nos inclinan a pensar que tenemos datos de cada cuarto de hora (no necesariamente todos los días ni todas las horas).
+
+***
+
+Sobre las variables que identifican una localización;
+
+La variable "id" es un identificador de la calle, cuyo nombre se guarda en "carrer". Entonces, deben coincidir el número de "id" distintos con el número de casos "carrer" diferentes;
+
+```{r}
+# sanity-check
+nids <- length(unique(dat$id))
+ncarrers <- length(unique(dat$carrer))
+stopifnot(nids == ncarrers)   
+nids
+```
+
+
+```{r}
+head(sort(unique(dat$carrer)),10)
+tail(sort(unique(dat$carrer)),10)
+```
+
+Vemos que algunas calles tienen de nombre "". Trataremos estos casos en la fase de limpieza.
+
+# Limpieza de los datos
+
+Realizaremos la limpieza de los datos en primer lugar. De esta manera los datos que haya que formatear ya estarán limpios y se trabajará más eficientemente al tratar menos volumen de datos.
+
+Veamos los valores que toma la variable estado;
+
+```{r}
+unique(dat$estat)
+```
+
+Sin embargo, desde el portal de datos abiertos sólo indican la leyenda de estos cuatro estados;
+
+0 -> FLUIDO  
+1 -> DENSO  
+2 -> CONGESTIONADO  
+3 -> CORTADO  
+
+Que aparecen con estas frecuencias:
+
+```{r}
+table(dat$estat)
+```
+
+Puesto que el resto de los estados son desconocidos para nosotros, vamos a juntarlo en  valor **estat=4** para indicar ESTADO DESCONOCIDO para después eliminar sus registros.
+
+```{r}
+dat[which(dat$estat>3),"estat"] <- 4
+table(dat$estat)
+```
+
+Obsérvese que todavía nos han quedado registros con estado = "". Vamos a examinar qué son.
+
+```{r}
+head(dat[which(dat$estat==""),c("dia","hora","minut","estat", "id", "carrer")])
+```
+
+Son registros que no tienen información del estado ni de la calle. También los incluimos en el estado 4 - DESCONOCIDO
+
+```{r}
+dat[which(dat$estat==""),"estat"] <- 4
+table(dat$estat)
+```
+
+Finalmente eliminamos del dataset los estados desconocidos:
+
+```{r}
+d_limpio <- subset(dat, dat$estat < 4)
+dat <- d_limpio
+table(dat$estat)
+```
+Antes de efectuar la limpieza de la variable estado teníamos calles con valores "". Nos planteamos la posibilidad de que esos valores desconocidos sigan apareciendo;
+
+```{r}
+head(sort(unique(dat$carrer)))
+head(sort(unique(dat$id)))
+```
+
+Como vemos, junto con la limpieza de los estados anómalos también se han eliminado los datos desconocidos de las calles.
+
+```{r}
+100*(nrow(tot) - nrow(dat))/nrow(tot)  # Porcentaje de registros eliminados en la limpieza
+
+```
+
+> Durante la fase de limpieza se han eliminado un 8% de los registros (aproximadamente 150.000)
+
+# Formateo de los datos 
+
+Se crean variables nuevas que nos servirán para más adelante;
+
+* Crearemos una cadena con la fecha formateada
+* Crearemos una variable factor del estado
+* Crearemos una variable booleana "atasco" que incluye la interpretación de lo que es "atascado" o  "congestionado"
+
+Creamos una nueva variable con la fecha formateada como "año-mes-dia";
+
+```{r}
+fecha<-paste(as.character(dat[,1]),as.character(dat[,2]),as.character(dat[,3]),sep="-")
+dat$fecha<-fecha
+min(fecha)
+max(fecha)
+head(dat)
+```
+
+Creamos una variable factor sobre el estado.  Obsérvese que no incluimos el estado 4 - DESCONOCIDO porque éste ya está eliminado de los datos.
+
+```{r}
+dat$festat <- factor(dat$estat, levels = 0:3, labels = c("Fluido", "Denso","Congestionado","Cortado"))
+head(dat)
+```
+
+Vamos a definir una variable booleana "atasco" que utilizaremos para definir cuando consideramos que la calle está atascada o congestionada. En el enunciado de la práctica indica que atasco es TRUE cuando el estado es 1 - Denso o 2 - Congestionado. Es decir;
+
+"estat" | "atasco"
+--------|---------
+0 - Fluido |  0 - No atascado
+1 - Denso  |  1 - Atascado
+2 - Congestionado | 1 - Atascado
+3 - Cortado       | 0 - No atascado
+
+
+Sin embargo, podríamos escoger otras interpretaciones, como por ejemplo;
+
+ * segunda interpretación; "atasco" = 1 si "estat" es 1 - Denso,  2 - Congestionado o 3 - Cortado
+ * tercera interpretación; "atasco" = 1 si "estat" es 2 - Congestionado o 3 - Cortado
+ * etc.
+ 
+Durante el desarrollo de este estudio *nos limitaremos a la primera interpretación.*
+
+```{r}
+atasco = rep(-1,length(dat$estat))
+atasco [which(dat$estat==1)]<-1
+atasco [which(dat$estat==2)]<-1
+atasco [which(dat$estat==3)]<-0  # NOTA: En esta interpretacion los dias cortados no serán atascos
+atasco [which(dat$estat==0)]<-0  
+dat$atasco<-atasco
+table(dat$atasco)# Si hay algún valor "-1" es que lo hemos hecho mal
+table(dat$estat)
+```
+
+¿Cuál fue el peor día ?(día con más congestiones). Se puede utilizar Date$yday 
+```{r}
+dat_congestionado <- subset(dat, dat$atasco == "1")
+fecha_congestion <- sort(table(dat_congestionado$fecha), decreasing= TRUE)[1]
+fecha_congestion <- names(fecha_congestion)
+fecha_congestion
+as.POSIXlt(fecha_congestion)$yday 
+```
+
+¿Cuál es el peor tramo? (Tramo con más proporción de congestiones)
+```{r}
+carrer_congestion <- sort(table(dat_congestionado$carrer), decreasing= TRUE)[1]
+carrer_congestion <- names(carrer_congestion)
+carrer_congestion
+```
+¿Cuál es peor y el mejor día de la semana? .  Se puede utilizar Date$wday
+```{r}
+
+# Preparamos las fechas (Siendo 1 = Lunes...7 = Domingo)
+dat_congestionado$wday<-as.POSIXlt(as.Date(dat_congestionado$fecha))$wday
+dat_congestionado$wday[which(dat_congestionado$wday==0)]<-7 
+
+# Peor dia de la semana 
+dia_mas_atascos <- sort(table(dat_congestionado$wday), decreasing= TRUE)[1]
+names(dia_mas_atascos)
+sum(dia_mas_atascos) # Nº de Atascos
+
+
+#Mejor dia de la semana 
+dia_menos_atasco <- sort(table(dat_congestionado$wday), decreasing=FALSE)[1]
+names(dia_menos_atasco)
+sum(dia_menos_atasco) # Nº de Atascos
+```
+
+¿Las fallas incremetan las congestiones?. Considerar Fallas del 16 al 19 de marzo (incluidos)
+```{r}
+fallas = rep(0,length(dat$mes))
+fallas [which(dat$mes==3 & dat$dia>=16 & dat$dia <=19)]<-1
+dat$fallas <- fallas
+xfallas<-by(dat[,"atasco"], dat$fallas, mean)
+xfallas[2]/xfallas[1]
+
+
+
+````
+Durante fallas hay casi 3 veces más atascos que en un período no fallero
+
+Se realiza un estudio sobre los periodos más frecuentes de congestión considerando horas y días de la semana.
+
+Del punto anterior se concluye que el periodo de fallas (Del 16 al 19 de marzo (incluidos)) triplica el número de atascos, por lo que no se considera un periodo representativo del comportamiento del tráfico y se excluye del estudio.
+```{r}
+dat_nofallas <- subset(dat, dat$fallas == "0")
+dsem<-as.POSIXlt(as.Date(dat_nofallas[,9]))$wday
+dsem[which(dsem==0)]<-7
+dat_nofallas$hora[which(dat_nofallas$hora==0)]<-24
+dat_nofallas$dsem <- dsem
+xhoradsem<-by(dat_nofallas[,"atasco"],list(as.numeric(dat_nofallas$hora),as.numeric(dat_nofallas$dsem)),sum)
+mhoradsem<-matrix(xhoradsem,24,7)
+plot(mhoradsem[,1],lty=1,type="l", ylab="Atascos", xlab="Horas", ylim=c(1,229), col=1,xlim=c(1,24),main="Atascos por Hora y Día de Semana en Valencia (Del 2-10-15 al 4-9-15)",xaxt="none")
+for ( i in 2:7)
+{
+    lines(mhoradsem[,i], lty=i,col=i,xlim=c(1,24)) 
+    axis(1, seq(1,24,1),las=1, cex.axis=0.55, font=1)
+}
+legend('left',c("Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"), col=c(1:7), lty=1:7,cex=0.8)
+````
+
+El gráfico muestra un comportamiento diferenciado en las horas que se producen los atascos dependiendo de si se trata un dia entresemana o de fin de semana, siendo el Lunes el día que más atascos se producen, y el Domingo el día que menos.
+
+Para los días entresemana, las horas en las que se producen más atascos se pueden dividir en tres tramos:
+
+* Las horas de inicio de jornada laboral (De 7h a 9h): Se produce el pico más alto de atascos a las 9h de la mañana. Exceptuando el lunes, el número de atascos entre el resto de dias de la semana es similar dentro del rango de inicio de la jornada.
+* La pausa para la comida o fin de jornada laboral en el caso de funcionarios (De 13h a 15h):Se produce el pico más alto de atascos a las 14h del medíodia, exceptuando el jueves en el que se produce a la 13h.
+* Final del la jornada laboral (18h a 20h): Los atascos al final de la jornada presentan más variabilidad que los otros dos tramos, tanto en horas como en días que. Se observa que el día que más atascos hay es el viernes a las 20h, pero en esta hora no se produce ningún otro pico para el resto días. Las 17h de la tarde es la hora más congestionada para el Martes, Miércoles, pero no para el Jueves.
+
+El día que más variabilidad presenta durante las horas del día es el Lunes, y el que menos el Viernes (Coincidiendo con el inicio y fin de la semana Laboral)
+
+Con todo ello, se puede concluir que los conductores de Valencia suele iniciar la jornada laboral en la misma franja horaria todos los días entre semana, mientras que la hora del fin de la jornada laboral tiene un rango más amplio y variable respecto a la hora y al dia de la semana . Esto puede deberse por ejemplo, a la carga de trabajo, que en determinados días sea superior y los conductores se queden haciendo horas extras, variando la hora de final de la jornada.Además normalmente la gente que inicia su jornada laboral por la mañana, dispone de tiempo libre por la tarde sin un hora determinada de inicio y un día prefijado para la actividad de tiempo libre (a diferencia del inicio de la jornada laboral),por lo que los desplazamientos se producen en un rango más amplio de horas y días.
+
+Para los días de fin de semana,las horas en las que se producen más atascos se pueden dividir en dos tramos:
+
+
+* Mediodía:El sábabo y el domingo se comportan de manera similar, habiendo un pico de atascos durante el mediodía (de 13 a 15), produciendose el pico más alto a las 14, donde la gente probablemente se desplace para ir a comer. 
+
+* Tarde-Noche:En esta franja el Sábado y el Domingo también se comportan de manera similar.El pico se produce de las 17 a las 20 donde la gente se desplazará probablemente para realizar actividades de ocio o cenar.
+
+En cualquier tramo de los días de fin semana, durante el domingo se producen menos atascos que el sábado, ya que la gente sale menos el Domingo.
